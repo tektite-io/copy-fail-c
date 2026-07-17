@@ -110,7 +110,7 @@ and `perror`.
 
 ## Architectural choices
 
-Three small toolchain features carry most of the weight in keeping the source
+A few small toolchain features carry most of the weight in keeping the source
 portable and the payload small.
 
 ### nolibc
@@ -121,9 +121,9 @@ torvalds/linux `tools/include/nolibc/`. It provides `_start`, a portable
 conventions encoded in `nolibc/arch-*.h`. Building the payload with
 `-nostdlib -static -ffreestanding -Inolibc` produces a tiny static ELF that
 calls into the kernel directly without dragging in glibc startup, TLS init,
-or stack-canary plumbing. Result: ~1.7 KB on x86_64, ~2.0 KB on aarch64,
-versus ~17 KB for the same `payload.c` linked against musl-static or
-~700 KB against glibc-static.
+or stack-canary plumbing. Result once packed and section-stripped (both
+below): ~720 bytes on x86_64, ~1.2 KB on aarch64, versus ~17 KB for the same
+`payload.c` linked against musl-static or ~700 KB against glibc-static.
 
 ### `ld -r -b binary` for embedding
 
@@ -149,7 +149,23 @@ which collapses `.text`/`.rodata`/`.data` into a single LOAD segment with
 default. This produces an "RWX permissions" warning from `ld`, which is
 informational only - the payload's runtime memory protection doesn't matter to
 its single-purpose program. Without this flag, the same code links to ~13 KB
-on x86_64 (mostly inter-segment zero padding); with it, ~1.7 KB.
+on x86_64 (mostly inter-segment zero padding); with it, ~1.3 KB before the
+section-header strip below.
+
+### Stripping section headers
+
+After linking, `objcopy --strip-section-headers` removes the payload's section
+header table and `.shstrtab`. The kernel ELF loader maps a program from its
+program headers alone, so those bytes never load at runtime, and because
+`payload` is embedded verbatim they also inflate the drop and the
+`patch_chunk` iteration count. Stripping them takes the x86_64 payload from
+~1.3 KB to 720 bytes (322 four-byte iterations down to 180). Two link-time
+flags shave the rest: `-Wl,--build-id=none` drops the build-id note, and
+`-fcf-protection=none` drops the x86 CET note where the compiler supports it.
+
+The strip needs binutils >= 2.40. Cross builds pass the target's objcopy via
+`OBJCOPY=` (e.g. `OBJCOPY=aarch64-linux-gnu-objcopy`); when objcopy cannot do
+it, the build prints a note and keeps a valid, larger payload.
 
 
 ## Variants and cashout viability

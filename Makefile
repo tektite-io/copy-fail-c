@@ -27,9 +27,18 @@
 
 CC ?= cc
 LD ?= ld
+# objcopy for the section-header strip below. For cross builds set this to the
+# target's objcopy (e.g. aarch64-linux-gnu-objcopy) alongside CC/LD; the host
+# objcopy cannot process a foreign-arch ELF.
+OBJCOPY ?= objcopy
 
 CFLAGS  ?= -O2 -Wall -Wextra
 LDFLAGS ?= -Wl,-z,noexecstack
+
+# -fcf-protection=none drops the x86 CET .note.gnu.property from the payload.
+# The flag errors on some non-x86 targets, so probe and use it only where the
+# compiler accepts it (it is a no-op where CET does not apply anyway).
+CF_PROTECTION_NONE := $(shell $(CC) -fcf-protection=none -x c -c /dev/null -o /dev/null >/dev/null 2>&1 && echo -fcf-protection=none)
 
 # nolibc / freestanding payload build:
 #   -nostdlib                       no glibc/musl init or libs
@@ -42,6 +51,8 @@ LDFLAGS ?= -Wl,-z,noexecstack
 #   -Inolibc                        find nolibc.h
 #   -include compat.h               provide pre-5.6 UAPI time typedefs nolibc
 #                                   needs (no-op on 5.6+ headers; see compat.h)
+#   -Wl,--build-id=none             drop the .note.gnu.build-id note
+#   $(CF_PROTECTION_NONE)           drop the x86 CET note where supported
 #
 # Linker flags:
 #   -Wl,-N                          merge text+data into one RWX LOAD segment
@@ -57,7 +68,9 @@ PAYLOAD_BASE_CFLAGS ?= -nostdlib -static -Os -s \
                        -fno-ident \
                        -fno-stack-protector \
                        -Inolibc \
-                       -include compat.h
+                       -include compat.h \
+                       -Wl,--build-id=none \
+                       $(CF_PROTECTION_NONE)
 PAYLOAD_PACK_LDFLAGS ?= -Wl,-N -Wl,-z,max-page-size=0x10
 PAYLOAD_CFLAGS ?= $(PAYLOAD_BASE_CFLAGS) $(PAYLOAD_PACK_LDFLAGS)
 
@@ -104,8 +117,15 @@ zig-musl-static: musl-shim
 	    PAYLOAD_CFLAGS="$(PAYLOAD_BASE_CFLAGS) $(ZIG_PAYLOAD_PACK_LDFLAGS) -isystem $(CURDIR)/$(MUSL_SHIM_DIR)" \
 	    CFLAGS="$(CFLAGS) -isystem $(CURDIR)/$(MUSL_SHIM_DIR)"
 
+# Strip the section header table + .shstrtab, which the kernel ELF loader
+# never reads, from the linked payload. This is the largest single size win
+# (~730 bytes on x86_64) and it also embeds verbatim, so it lowers the drop
+# and the patch_chunk iteration count. Needs binutils >= 2.40; non-fatal, so
+# an older or wrong-arch objcopy leaves a valid (larger) payload plus a hint.
 payload: payload.c
 	$(CC) $(PAYLOAD_CFLAGS) $< -o $@
+	@$(OBJCOPY) --strip-section-headers $@ 2>/dev/null \
+	    || echo "note: $(OBJCOPY) did not strip section headers; payload is valid but larger (needs binutils >= 2.40; for cross builds set OBJCOPY=<target>-objcopy)"
 
 # Default embed path: the synthesized symbol names are derived from the input
 # filename as given on the command line. We pass `payload` (not `./payload`),
