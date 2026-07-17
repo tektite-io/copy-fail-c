@@ -17,4 +17,11 @@
  * Returns 0 on success, -1 on error (errno set, perror printed). */
 int patch_chunk(int file_fd, off_t offset, const unsigned char four_bytes[4]);
 
+/* Print a diagnostic hint to stderr for a patch_chunk() failure when errno
+ * indicates the environment cannot run the primitive: the AF_ALG family is
+ * absent (EAFNOSUPPORT) or the authencesn template is unregistered (ENOENT).
+ * Prints nothing for other errno values. Pass errno immediately after
+ * patch_chunk() returns -1. */
+void explain_patch_failure(int err);
+
 #endif /* COPY_FAIL_UTILS_H */

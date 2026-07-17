@@ -16,6 +16,7 @@
 #include "utils.h"
 
 #include <endian.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -155,9 +156,31 @@ int patch_chunk(int file_fd, off_t offset,
     rc = 0;
 
 out:
-    if (pipefd[0] >= 0) close(pipefd[0]);
-    if (pipefd[1] >= 0) close(pipefd[1]);
-    if (op_sock   >= 0) close(op_sock);
-    if (ctrl_sock >= 0) close(ctrl_sock);
+    {
+        /* Preserve the failing operation's errno across cleanup so callers
+         * can inspect it (close() may otherwise overwrite it). */
+        int saved_errno = errno;
+        if (pipefd[0] >= 0) close(pipefd[0]);
+        if (pipefd[1] >= 0) close(pipefd[1]);
+        if (op_sock   >= 0) close(op_sock);
+        if (ctrl_sock >= 0) close(ctrl_sock);
+        errno = saved_errno;
+    }
     return rc;
+}
+
+void explain_patch_failure(int err) {
+    if (err == EAFNOSUPPORT) {
+        fprintf(stderr,
+                "[?] AF_ALG socket family unavailable: this kernel lacks "
+                "CONFIG_CRYPTO_USER_API_AEAD, or it is blocked in this "
+                "sandbox/container. The primitive cannot run here.\n");
+    } else if (err == ENOENT) {
+        fprintf(stderr,
+                "[?] authencesn(hmac(sha256),cbc(aes)) template not "
+                "registered. Load it with `modprobe authencesn` (pulling in "
+                "authenc, hmac, sha256, cbc, aes) and check /proc/crypto. If "
+                "the template is genuinely absent, the primitive cannot run "
+                "on this kernel.\n");
+    }
 }
