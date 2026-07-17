@@ -63,15 +63,17 @@ make CC=aarch64-linux-gnu-gcc LD=aarch64-linux-gnu-ld
 * `ld -r -b binary`를 지원하는 링커 (binutils ld 및 lld 모두 지원)
 * `linux/if_alg.h` 및 `<asm/unistd.h>`를 제공하는 커널 UAPI 헤더 (Debian/Ubuntu: `linux-libc-dev`, 크로스 변형: 일반적으로 크로스 툴체인 패키지에 의해 함께 설치됨)
 
+Linux 5.6 이전의 헤더 세트는 벤더 코드로 포함된 nolibc가 사용하는 `__kernel_old_time_t` 및 `struct __kernel_old_timespec`보다 앞서 존재하여 이들을 정의하지 않습니다. `compat.h`(페이로드 빌드에 강제 포함됨)는 이들이 없을 때 이를 제공하므로, 오래된 `linux-libc-dev`로도 여전히 빌드할 수 있습니다. 5.6 이상의 헤더에서는 아무런 동작도 하지 않습니다.
+
 외부 라이브러리 종속성이 없습니다. 페이로드는 nolibc에 대해 독립적(freestanding)으로 빌드되며, 드로퍼는 오직 `fprintf`와 `perror`를 위해 호스트 libc와 링크됩니다.
 
 ## 아키텍처 선택
 
-코드를 이식성 있게 유지하고 페이로드 크기를 작게 유지하는 데 있어 툴체인의 3가지 작은 기능이 큰 역할을 합니다.
+코드를 이식성 있게 유지하고 페이로드 크기를 작게 유지하는 데 있어 툴체인의 몇 가지 작은 기능이 큰 역할을 합니다.
 
 ### nolibc
 
-`nolibc/`는 커널에서 제공하는 작고 헤더로만 구성된 libc 대체품으로, torvalds/linux의 `tools/include/nolibc/`에서 가져왔습니다. 이는 `_start`, 이식성 있는 `syscall()` 매크로, 인라인 시스템 콜 래퍼를 제공하며, 아키텍처별 레지스터 규칙은 `nolibc/arch-*.h`에 인코딩되어 있습니다. `-nostdlib -static -ffreestanding -Inolibc` 옵션으로 페이로드를 빌드하면 glibc의 시작 코드, TLS 초기화 또는 스택 카나리 메커니즘을 포함하지 않고 커널을 직접 호출하는 아주 작은 정적 ELF가 생성됩니다. 결과적으로 x86_64에서는 약 1.7 KB, aarch64에서는 약 2.0 KB가 됩니다. 동일한 `payload.c`를 musl-static으로 링크하면 약 17 KB, glibc-static으로 링크하면 약 700 KB가 되는 것과 대조적입니다.
+`nolibc/`는 커널에서 제공하는 작고 헤더로만 구성된 libc 대체품으로, torvalds/linux의 `tools/include/nolibc/`에서 가져왔습니다. 이는 `_start`, 이식성 있는 `syscall()` 매크로, 인라인 시스템 콜 래퍼를 제공하며, 아키텍처별 레지스터 규칙은 `nolibc/arch-*.h`에 인코딩되어 있습니다. `-nostdlib -static -ffreestanding -Inolibc` 옵션으로 페이로드를 빌드하면 glibc의 시작 코드, TLS 초기화 또는 스택 카나리 메커니즘을 포함하지 않고 커널을 직접 호출하는 아주 작은 정적 ELF가 생성됩니다. 결과적으로 (둘 다 아래에서 설명하는) 패킹 및 섹션 헤더 제거를 거치고 나면 x86_64에서는 약 720바이트, aarch64에서는 약 1.2 KB가 됩니다. 동일한 `payload.c`를 musl-static으로 링크하면 약 17 KB, glibc-static으로 링크하면 약 700 KB가 되는 것과 대조적입니다.
 
 ### 페이로드 내장을 위한 `ld -r -b binary`
 
@@ -87,7 +89,13 @@ _binary_payload_size     바이트 단위 크기를 값으로 갖는 절대 심�
 
 ### `-Wl,-N` 및 엄격한 `max-page-size`
 
-페이로드는 `-Wl,-N -Wl,-z,max-page-size=0x10` 옵션으로 정적 링크됩니다. 이는 `.text`/`.rodata`/`.data`를 커널 페이지 정렬인 세그먼트당 4 KB의 기본값 대신 16바이트 파일 정렬을 가지는 단일 LOAD 세그먼트로 병합합니다. 이로 인해 `ld`에서 "RWX permissions" 경고가 발생하지만 이는 단순한 정보일 뿐입니다. 단일 목적 프로그램인 페이로드의 런타임 메모리 보호는 중요하지 않기 때문입니다. 이 플래그가 없으면 동일한 코드가 x86_64에서 약 13 KB(대부분 세그먼트 간 0 패딩)로 링크되지만, 이 옵션을 사용하면 약 1.7 KB로 줄어듭니다.
+페이로드는 `-Wl,-N -Wl,-z,max-page-size=0x10` 옵션으로 정적 링크됩니다. 이는 `.text`/`.rodata`/`.data`를 커널 페이지 정렬인 세그먼트당 4 KB의 기본값 대신 16바이트 파일 정렬을 가지는 단일 LOAD 세그먼트로 병합합니다. 이로 인해 `ld`에서 "RWX permissions" 경고가 발생하지만 이는 단순한 정보일 뿐입니다. 단일 목적 프로그램인 페이로드의 런타임 메모리 보호는 중요하지 않기 때문입니다. 이 플래그가 없으면 동일한 코드가 x86_64에서 약 13 KB(대부분 세그먼트 간 0 패딩)로 링크되지만, 이 옵션을 사용하면 아래에서 설명하는 섹션 헤더 제거 이전 기준으로 약 1.3 KB로 줄어듭니다.
+
+### 섹션 헤더 제거
+
+링크 후, `objcopy --strip-section-headers`는 페이로드의 섹션 헤더 테이블과 `.shstrtab`을 제거합니다. 커널 ELF 로더는 프로그램 헤더만으로 프로그램을 매핑하므로 이 바이트들은 런타임에 절대 로드되지 않으며, `payload`가 그대로 내장되기 때문에 드롭 크기와 `patch_chunk` 반복 횟수도 부풀립니다. 이를 제거하면 x86_64 페이로드가 약 1.3 KB에서 720바이트로 줄어듭니다(4바이트 반복 322회에서 180회로 감소). 두 개의 링크 타임 플래그가 나머지를 줄여줍니다: `-Wl,--build-id=none`은 build-id 노트를 제거하고, `-fcf-protection=none`은 컴파일러가 지원하는 경우 x86 CET 노트를 제거합니다.
+
+이 제거에는 binutils >= 2.40이 필요합니다. 크로스 빌드는 `OBJCOPY=`(예: `OBJCOPY=aarch64-linux-gnu-objcopy`)를 통해 대상의 objcopy를 전달합니다. objcopy가 이를 수행할 수 없는 경우, 빌드는 안내 메시지를 출력하고 유효하지만 더 큰 페이로드를 유지합니다.
 
 ## 변형 및 권한 상승(Cashout) 가능성
 

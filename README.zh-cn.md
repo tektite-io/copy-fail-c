@@ -63,15 +63,17 @@ make CC=aarch64-linux-gnu-gcc LD=aarch64-linux-gnu-ld
 * 支持 `ld -r -b binary` 的链接器 (binutils ld 和 lld 均支持)
 * 提供 `linux/if_alg.h` 和 `<asm/unistd.h>` 的内核 UAPI 头文件 (Debian/Ubuntu: `linux-libc-dev`; 交叉变体: 通常由交叉工具链包引入)
 
+早于 Linux 5.6 的头文件集尚未包含引入的 nolibc 所使用的 `__kernel_old_time_t` 和 `struct __kernel_old_timespec`。`compat.h` (被强制包含到有效载荷构建中) 在它们缺失时提供这些定义，因此较旧的 `linux-libc-dev` 仍能完成构建。在 5.6 及更新的头文件上它是空操作。
+
 没有外部库依赖。有效载荷是针对 nolibc 独立 (freestanding) 构建的；释放器仅为了 `fprintf` 和 `perror` 链接到宿主 libc。
 
 ## 架构选择
 
-有三个微小的工具链特性在保持源代码可移植性和有效载荷小巧方面发挥了主要作用。
+有几个微小的工具链特性在保持源代码可移植性和有效载荷小巧方面发挥了主要作用。
 
 ### nolibc
 
-`nolibc/` 是内核的微型仅头文件 libc 替代品，源自 torvalds/linux 的 `tools/include/nolibc/`。它提供了 `_start`、可移植的 `syscall()` 宏以及内联系统调用包装器，特定架构的寄存器约定编码在 `nolibc/arch-*.h` 中。使用 `-nostdlib -static -ffreestanding -Inolibc` 构建有效载荷会生成一个微小的静态 ELF，直接调用内核，而不会引入 glibc 启动、TLS 初始化或 stack-canary 机制。结果：x86_64 上约为 1.7 KB，aarch64 上约为 2.0 KB。相比之下，相同的 `payload.c` 链接到 musl-static 约为 17 KB，链接到 glibc-static 约为 700 KB。
+`nolibc/` 是内核的微型仅头文件 libc 替代品，源自 torvalds/linux 的 `tools/include/nolibc/`。它提供了 `_start`、可移植的 `syscall()` 宏以及内联系统调用包装器，特定架构的寄存器约定编码在 `nolibc/arch-*.h` 中。使用 `-nostdlib -static -ffreestanding -Inolibc` 构建有效载荷会生成一个微小的静态 ELF，直接调用内核，而不会引入 glibc 启动、TLS 初始化或 stack-canary 机制。结果：经过打包和剥离节头 (两者都在下文说明) 之后，x86_64 上约为 720 字节，aarch64 上约为 1.2 KB。相比之下，相同的 `payload.c` 链接到 musl-static 约为 17 KB，链接到 glibc-static 约为 700 KB。
 
 ### 用于嵌入的 `ld -r -b binary`
 
@@ -87,7 +89,14 @@ _binary_payload_size     绝对符号，其值为以字节为单位的大小
 
 ### `-Wl,-N` 结合严格的 `max-page-size`
 
-有效载荷使用 `-Wl,-N -Wl,-z,max-page-size=0x10` 进行静态链接。这会将 `.text`/`.rodata`/`.data` 折叠成一个具有 16 字节文件对齐的单一 LOAD 段，而不是默认的内核页面对齐的每段 4 KB。这会产生来自 `ld` 的 "RWX permissions" 警告，这仅是信息性的——有效载荷的运行时内存保护对其单一目的程序无关紧要。如果没有此标志，相同的代码在 x86_64 上链接约为 13 KB (主要是段间零填充)；使用它则为 1.7 KB。
+有效载荷使用 `-Wl,-N -Wl,-z,max-page-size=0x10` 进行静态链接。这会将 `.text`/`.rodata`/`.data` 折叠成一个具有 16 字节文件对齐的单一 LOAD 段，而不是默认的内核页面对齐的每段 4 KB。这会产生来自 `ld` 的 "RWX permissions" 警告，这仅是信息性的——有效载荷的运行时内存保护对其单一目的程序无关紧要。如果没有此标志，相同的代码在 x86_64 上链接约为 13 KB (主要是段间零填充)；使用它则约为 1.3 KB，这是在下文所述的剥离节头之前。
+
+### 剥离节头表
+
+链接之后，`objcopy --strip-section-headers` 会移除有效载荷的节头表和 `.shstrtab`。内核 ELF 加载器仅根据程序头 (program header) 来映射程序，因此这些字节在运行时永远不会被加载；而且由于 `payload` 是被逐字节嵌入的，它们还会膨胀释放的数据量以及 `patch_chunk` 的迭代次数。剥离它们可将 x86_64 有效载荷从约 1.3 KB 减小到 720 字节 (322 次 4 字节迭代减少到 180 次)。另有两个链接期标志削减其余部分：`-Wl,--build-id=none` 去掉 build-id note，`-fcf-protection=none` 在编译器支持时去掉 x86 CET note。
+
+剥离需要 binutils >= 2.40。交叉构建通过 `OBJCOPY=` 传入目标平台的 objcopy (例如 `OBJCOPY=aarch64-linux-gnu-objcopy`)；当 objcopy 无法完成时，构建会打印一条提示并保留一个有效但更大的有效载荷。
+
 
 ## 变体和变现可行性
 
