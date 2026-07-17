@@ -40,6 +40,8 @@ LDFLAGS ?= -Wl,-z,noexecstack
 #   -fno-stack-protector            we have no __stack_chk_fail
 #   -Os -s                          size-opt + strip
 #   -Inolibc                        find nolibc.h
+#   -include compat.h               provide pre-5.6 UAPI time typedefs nolibc
+#                                   needs (no-op on 5.6+ headers; see compat.h)
 #
 # Linker flags:
 #   -Wl,-N                          merge text+data into one RWX LOAD segment
@@ -54,7 +56,8 @@ PAYLOAD_BASE_CFLAGS ?= -nostdlib -static -Os -s \
                        -fno-asynchronous-unwind-tables \
                        -fno-ident \
                        -fno-stack-protector \
-                       -Inolibc
+                       -Inolibc \
+                       -include compat.h
 PAYLOAD_PACK_LDFLAGS ?= -Wl,-N -Wl,-z,max-page-size=0x10
 PAYLOAD_CFLAGS ?= $(PAYLOAD_BASE_CFLAGS) $(PAYLOAD_PACK_LDFLAGS)
 

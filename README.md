@@ -98,6 +98,11 @@ Required to build:
   (Debian/Ubuntu: `linux-libc-dev`; cross variants: typically pulled in by
   the cross-toolchain package)
 
+Header sets older than Linux 5.6 predate `__kernel_old_time_t` and
+`struct __kernel_old_timespec`, which the vendored nolibc uses. `compat.h`
+(force-included into the payload build) supplies them when absent, so an
+older `linux-libc-dev` still builds. It is a no-op on 5.6+ headers.
+
 There are no external library dependencies. The payload is built freestanding
 against nolibc; the dropper links against the host libc only for `fprintf`
 and `perror`.
